@@ -9,8 +9,8 @@ lazy val geo = project
     .settings(
         name := "geo",
         resolvers ++= Seq(osgeo, boundless, boundless2),
-        libraryDependencies ++= Seq(jts, geotools),
-        mainClass in (Compile, run) := Some("examples.GeoExamples")
+        libraryDependencies ++= Seq(jts, geotools, hsql)
+        // mainClass in (Compile, run) := Some("examples.GeoExamples")
     )
 
 lazy val pg = project

@@ -5,7 +5,7 @@
 - polygon coverage
 - working with projections and re-projecting data
 ### WKT <a name="wkt"></a>
-Well-known text (WKT) is a text markup language for representing vector geometry objects on a map, spatial reference systems of spatial objects and transformations between spatial reference systems. A binary equivalent, known as well-known binary (WKB), is used to transfer and store the same information on databases. [Wiki](https://en.wikipedia.org/wiki/Well-known_text)
+Well-known text ([WKT]((https://en.wikipedia.org/wiki/Well-known_text))) is a text markup language for representing vector geometry objects on a map, spatial reference systems of spatial objects and transformations between spatial reference systems. A binary equivalent, known as well-known binary (WKB), is used to transfer and store the same information on databases.
 
 Examples:    
 - Kharkiv Coordinates    
@@ -18,19 +18,109 @@ etc.
 
 We had a lot of `Fields` and `Locations` stored in database. They all are represented with `MULTIPOLYGONS`.    
 Multipolygon is an aggregate of multiple polygons.    
-E.g.
-`MULTIPOLYGON (((35.02769194278926 48.466945072396236,36.26914702091426 50.00900677473481,36.32407866153926 48.86601241710432,35.88462553653926 48.53246329349378,35.02769194278926 48.466945072396236)), ((34.53330717716426 49.590627339715994,34.89585600528926 50.3326955326128,35.69785795841426 49.86050639066826,35.39024077091426 49.433695451520556,34.88486967716426 49.25475232008265,34.53330717716426 49.590627339715994), (34.96177397403926 49.95955749204947, 34.96177397403926 49.37650444784831 ,35.31333647403926 49.562131715107796, 34.96177397403926 49.95955749204947)))`    
+E.g.    
+```
+MULTIPOLYGON (
+    (( // quad
+        35.02769194278926 48.466945072396236, 36.26914702091426 50.00900677473481,
+        36.32407866153926 48.86601241710432, 35.88462553653926 48.53246329349378, 
+        35.02769194278926 48.466945072396236
+    )),
+    (
+        ( // 5-angled figure
+            34.53330717716426 49.590627339715994, 34.89585600528926 50.3326955326128,
+            35.69785795841426 49.86050639066826, 35.39024077091426 49.433695451520556,
+            34.88486967716426 49.25475232008265, 34.53330717716426 49.590627339715994
+        ),
+        ( // triangle cut
+            34.96177397403926 49.95955749204947, 34.96177397403926 49.37650444784831,
+            35.31333647403926 49.562131715107796, 34.96177397403926 49.95955749204947
+        )
+    )
+)
+```
 
 ![Multipolygon](mp.jpg)    
 Drawn with [Wicket](https://arthur-e.github.io/Wicket/sandbox-gmaps3.html)    
 
+---
+
 ### Geotools and JTS
-- reading wkt
-- primitives
-- find closest point on polygon
-- calculate distances
-- are we inside?
-- reprojecting
+- #### Java Topology Suite    
+    The [JTS](https://github.com/locationtech/jts) Topology Suite is a Java library for creating and manipulating vector geometry.    
+    We've used it to operate on geometry from database.
+
+- #### GeoTools
+    [GeoTools](http://geotools.org/) is an open source Java library that provides tools for geospatial data.
+
+
+
+
+- **Reading WKT**    
+All the polygons in the database were saved in WKB (Well Known Binary format), but we've been converting it to WKT prior to reading it in our app.
+Then we've read them with `WKTReader`.
+    ```
+    val reader = new WKTReader()
+    val line = "LINESTRING (49.9935 36.2304, 50.4501 30.5234, 49.8397 24.0297)"
+    val geom: LineString = reader.read(line).asInstanceOf[LineString]
+    ```
+
+- **Writing WKT**    
+Just for example:    
+    ```
+    val writer = new WKTWriter()
+    val wkt = writer.write(geom)
+    ```
+
+- **Writing WKB**    
+We had to update some of polygons in the database. So we were writing WKB back to database.    
+    ```
+    val writer = new WKBWriter()
+    val wkt = writer.write(geom)
+    ```
+
+- **Find closest point on polygon**    
+We had a task to detect distance of Device to a Location. It is then used to identify if point belongs to the polygon.
+
+    ```
+    val closestPointOnPolygon = DistanceOp.nearestPoints(polygon, point)(0) // get point on 1st (0th) object
+    closestPointOnPolygon
+    ```
+
+- Calculate distances between two points
+We've used [Orthodromic Distance](https://en.wikipedia.org/wiki/Great-circle_distance) to calculate distances between two points.
+
+    ```
+    private val crs = CRS.decode("EPSG:4326") //  referencing system
+    private val gc = new GeodeticCalculator(crs)
+
+    val pt = closestPoints.closestPoint(square, point)
+
+    gc.setStartingGeographicPoint(pt.getX(), pt.getY())
+    gc.setDestinationGeographicPoint(point.getX(), point.getY())
+    gc.getOrthodromicDistance
+    ```
+
+- Are we inside?    
+    If the distance was zero, we consider that the point is inside the polygon. (that simple, yes)
+
 - cutting polygons
+    Equipments that were working on the fields, say, Combines, were "covering" the field. The idea was, that if field is covered up to a certain margin it can be considered complete.
+    We were drawing a tiny square around equipments' coordinates, and we were "cutting" this square from the fields polygon.
+
+- Reprojecting  
+    One of the most difficult problems to solve was the accuracy of area calulations.
+    All polygons' coordinates are stored in Lat-Long format (regular GPS coordinates) which is in EPSG:4326 ([WGS 84](http://spatialreference.org/ref/epsg/wgs-84/)) Coordinate Referencing System. It spreads worldwide but it has no accuracy, no units, nothing. So it is not suitable to use for area calculation.     
+    We've reprojected from WGS 84 to [UTM](https://en.wikipedia.org/wiki/Universal_Transverse_Mercator_coordinate_system) zones depending on the central coordinates of each field. UTM does not give best accuracy, but it was good enough.
+    It was implemented on PostGIS side using [this](https://lists.osgeo.org/pipermail/postgis-users/2005-December/010253.html) approach.
+    
+    ```
+    val sourceCRS = CRS.decode("EPSG:4326")
+    val targetCRS = CRS.decode("EPSG:32633")
+    val transform = CRS.findMathTransform(sourceCRS, targetCRS, true)
+    val geog: Geometry = JTS.toGeographic(shape, sourceCRS)
+    JTS.transform(geog, transform)
+    ```
+
 ### Haversine distance
 - distance between points on a globe in KM
